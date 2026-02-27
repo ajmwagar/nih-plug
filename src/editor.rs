@@ -69,11 +69,37 @@ pub trait Editor: Send {
     /// loaded.
     fn param_values_changed(&self);
 
+    /// Returns whether the editor window can be resized by the host. If this returns `true`, the
+    /// host may allow the user to drag the window edges to resize it. The editor should handle
+    /// `WindowEvent::Resized` events from baseview to adapt to the new size.
+    ///
+    /// Defaults to `false` for backwards compatibility.
+    fn resizable(&self) -> bool {
+        false
+    }
+
+    /// Called by the host to check if a proposed size is valid. The editor should return the
+    /// nearest valid size. This is called before `set_size()` to allow the editor to constrain
+    /// the size to valid dimensions (e.g., maintaining aspect ratio, minimum/maximum sizes).
+    ///
+    /// The default implementation returns the proposed size unchanged.
+    fn constrain_size(&self, width: u32, height: u32) -> (u32, u32) {
+        (width, height)
+    }
+
+    /// Called by the host to resize the editor window. The editor should resize its window to
+    /// the given logical size. Returns `true` if the resize was successful.
+    ///
+    /// This is called after `constrain_size()` has been used to validate the dimensions.
+    /// The default implementation returns `false` (resize not supported).
+    fn set_size(&self, _width: u32, _height: u32) -> bool {
+        false
+    }
+
     // TODO: Reconsider adding a tick function here for the Linux `IRunLoop`. To keep this platform
     //       and API agnostic, add a way to ask the GuiContext if the wrapper already provides a
     //       tick function. If it does not, then the Editor implementation must handle this by
     //       itself. This would also need an associated `PREFERRED_FRAME_RATE` constant.
-    // TODO: Host->Plugin resizing
 }
 
 /// A raw window handle for platform and GUI framework agnostic editors. This implements

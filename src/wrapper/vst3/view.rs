@@ -376,20 +376,37 @@ impl<P: Vst3Plugin> IPlugView for WrapperView<P> {
     unsafe fn on_size(&self, new_size: *mut ViewRect) -> tresult {
         check_null_ptr!(new_size);
 
-        // TODO: Implement Host->Plugin resizing
-        let (unscaled_width, unscaled_height) = self.editor.lock().size();
         let scaling_factor = self.scaling_factor.load(Ordering::Relaxed);
-        let (editor_width, editor_height) = (
-            (unscaled_width as f32 * scaling_factor).round() as i32,
-            (unscaled_height as f32 * scaling_factor).round() as i32,
-        );
-
         let width = (*new_size).right - (*new_size).left;
         let height = (*new_size).bottom - (*new_size).top;
-        if width == editor_width && height == editor_height {
-            kResultOk
+
+        // Convert from scaled (physical) pixels to logical pixels
+        let logical_width = (width as f32 / scaling_factor).round() as u32;
+        let logical_height = (height as f32 / scaling_factor).round() as u32;
+
+        let editor = self.editor.lock();
+
+        // Check if the editor supports resizing
+        if editor.resizable() {
+            // Try to resize the editor
+            if editor.set_size(logical_width, logical_height) {
+                kResultOk
+            } else {
+                kResultFalse
+            }
         } else {
-            kResultFalse
+            // Not resizable - only accept if size matches current size
+            let (current_width, current_height) = editor.size();
+            let (scaled_width, scaled_height) = (
+                (current_width as f32 * scaling_factor).round() as i32,
+                (current_height as f32 * scaling_factor).round() as i32,
+            );
+
+            if width == scaled_width && height == scaled_height {
+                kResultOk
+            } else {
+                kResultFalse
+            }
         }
     }
 
@@ -425,19 +442,41 @@ impl<P: Vst3Plugin> IPlugView for WrapperView<P> {
     }
 
     unsafe fn can_resize(&self) -> tresult {
-        // TODO: Implement Host->Plugin resizing
-        kResultFalse
+        if self.editor.lock().resizable() {
+            kResultOk
+        } else {
+            kResultFalse
+        }
     }
 
     unsafe fn check_size_constraint(&self, rect: *mut ViewRect) -> tresult {
         check_null_ptr!(rect);
 
-        // TODO: Implement Host->Plugin resizing
-        if (*rect).right - (*rect).left > 0 && (*rect).bottom - (*rect).top > 0 {
-            kResultOk
-        } else {
-            kResultFalse
+        let scaling_factor = self.scaling_factor.load(Ordering::Relaxed);
+        let width = (*rect).right - (*rect).left;
+        let height = (*rect).bottom - (*rect).top;
+
+        if width <= 0 || height <= 0 {
+            return kResultFalse;
         }
+
+        // Convert from scaled (physical) pixels to logical pixels
+        let logical_width = (width as f32 / scaling_factor).round() as u32;
+        let logical_height = (height as f32 / scaling_factor).round() as u32;
+
+        // Ask the editor to constrain the size
+        let (constrained_width, constrained_height) =
+            self.editor.lock().constrain_size(logical_width, logical_height);
+
+        // Convert back to scaled pixels
+        let scaled_width = (constrained_width as f32 * scaling_factor).round() as i32;
+        let scaled_height = (constrained_height as f32 * scaling_factor).round() as i32;
+
+        // Update the rect with the constrained size (keeping top-left at origin)
+        (*rect).right = (*rect).left + scaled_width;
+        (*rect).bottom = (*rect).top + scaled_height;
+
+        kResultOk
     }
 }
 

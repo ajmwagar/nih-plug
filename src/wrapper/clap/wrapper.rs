@@ -2711,26 +2711,53 @@ impl<P: ClapPlugin> Wrapper<P> {
         true
     }
 
-    unsafe extern "C" fn ext_gui_can_resize(_plugin: *const clap_plugin) -> bool {
-        // TODO: Implement Host->Plugin GUI resizing
-        false
+    unsafe extern "C" fn ext_gui_can_resize(plugin: *const clap_plugin) -> bool {
+        check_null_ptr!(false, plugin, (*plugin).plugin_data);
+        let wrapper = &*((*plugin).plugin_data as *const Self);
+
+        wrapper
+            .editor
+            .borrow()
+            .as_ref()
+            .map(|e| e.lock().resizable())
+            .unwrap_or(false)
     }
 
     unsafe extern "C" fn ext_gui_get_resize_hints(
         _plugin: *const clap_plugin,
         _hints: *mut clap_gui_resize_hints,
     ) -> bool {
-        // TODO: Implement Host->Plugin GUI resizing
+        // TODO: Could expose min/max size and aspect ratio hints from Editor trait
         false
     }
 
     unsafe extern "C" fn ext_gui_adjust_size(
-        _plugin: *const clap_plugin,
-        _width: *mut u32,
-        _height: *mut u32,
+        plugin: *const clap_plugin,
+        width: *mut u32,
+        height: *mut u32,
     ) -> bool {
-        // TODO: Implement Host->Plugin GUI resizing
-        false
+        check_null_ptr!(false, plugin, (*plugin).plugin_data, width, height);
+        let wrapper = &*((*plugin).plugin_data as *const Self);
+
+        let scaling_factor = wrapper.editor_scaling_factor.load(Ordering::Relaxed);
+
+        // Convert from scaled (physical) pixels to logical pixels
+        let logical_width = ((*width) as f32 / scaling_factor).round() as u32;
+        let logical_height = ((*height) as f32 / scaling_factor).round() as u32;
+
+        // Ask the editor to constrain the size
+        let (constrained_width, constrained_height) = wrapper
+            .editor
+            .borrow()
+            .as_ref()
+            .map(|e| e.lock().constrain_size(logical_width, logical_height))
+            .unwrap_or((logical_width, logical_height));
+
+        // Convert back to scaled pixels
+        *width = (constrained_width as f32 * scaling_factor).round() as u32;
+        *height = (constrained_height as f32 * scaling_factor).round() as u32;
+
+        true
     }
 
     unsafe extern "C" fn ext_gui_set_size(
@@ -2738,20 +2765,33 @@ impl<P: ClapPlugin> Wrapper<P> {
         width: u32,
         height: u32,
     ) -> bool {
-        // TODO: Implement Host->Plugin GUI resizing
-        // TODO: The host will also call this if an asynchronous (on Linux) resize request fails
         check_null_ptr!(false, plugin, (*plugin).plugin_data);
         let wrapper = &*((*plugin).plugin_data as *const Self);
 
-        let (unscaled_width, unscaled_height) =
-            wrapper.editor.borrow().as_ref().unwrap().lock().size();
         let scaling_factor = wrapper.editor_scaling_factor.load(Ordering::Relaxed);
-        let (editor_width, editor_height) = (
-            (unscaled_width as f32 * scaling_factor).round() as u32,
-            (unscaled_height as f32 * scaling_factor).round() as u32,
-        );
 
-        width == editor_width && height == editor_height
+        // Convert from scaled (physical) pixels to logical pixels
+        let logical_width = (width as f32 / scaling_factor).round() as u32;
+        let logical_height = (height as f32 / scaling_factor).round() as u32;
+
+        let editor_guard = wrapper.editor.borrow();
+        let editor = match editor_guard.as_ref() {
+            Some(e) => e.lock(),
+            None => return false,
+        };
+
+        // If resizable, try to set the new size
+        if editor.resizable() {
+            editor.set_size(logical_width, logical_height)
+        } else {
+            // Not resizable - only accept if size matches current size
+            let (current_width, current_height) = editor.size();
+            let (scaled_width, scaled_height) = (
+                (current_width as f32 * scaling_factor).round() as u32,
+                (current_height as f32 * scaling_factor).round() as u32,
+            );
+            width == scaled_width && height == scaled_height
+        }
     }
 
     unsafe extern "C" fn ext_gui_set_parent(
